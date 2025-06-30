@@ -6,6 +6,7 @@ Render.com version of the Email Monitoring Agent with HTTP keep-alive endpoint
 import time
 import signal
 import sys
+import re
 import threading
 from datetime import datetime
 from email_monitor import EmailMonitor
@@ -80,22 +81,98 @@ class EmailMonitoringAgent:
         self.logger.info(f"Received signal {signum}, shutting down gracefully...")
         self.running = False
     
+    def extract_booking_details(self, email_body):
+        """Extract key booking details from Bookeo email"""
+        details = {}
+        
+        try:
+            # Extract Date
+            date_match = re.search(r'Date:\s*(.+)', email_body)
+            if date_match:
+                details['date'] = date_match.group(1).strip()
+            
+            # Extract Time
+            time_match = re.search(r'Time:\s*(.+)', email_body)
+            if time_match:
+                details['time'] = time_match.group(1).strip()
+            
+            # Extract Game
+            game_match = re.search(r'Game:\s*(.+)', email_body)
+            if game_match:
+                details['game'] = game_match.group(1).strip()
+            
+            # Extract Participants
+            participants_match = re.search(r'Participants:\s*(.+)', email_body)
+            if participants_match:
+                details['participants'] = participants_match.group(1).strip()
+            
+            # Extract Total price
+            price_match = re.search(r'Total price:\s*(.+)', email_body)
+            if price_match:
+                details['price'] = price_match.group(1).strip()
+            
+            # Extract Customer name
+            customer_match = re.search(r'Customer\s*([^\n]+)', email_body)
+            if customer_match:
+                details['customer'] = customer_match.group(1).strip()
+            
+            # Extract Customer email
+            email_match = re.search(r'Email:\s*([^\s\n]+)', email_body)
+            if email_match:
+                details['customer_email'] = email_match.group(1).strip()
+            
+            # Extract Customer phone
+            phone_match = re.search(r'Phone \(mobile\):\s*(.+)', email_body)
+            if phone_match:
+                details['customer_phone'] = phone_match.group(1).strip()
+            
+            # Extract Booking number
+            booking_match = re.search(r'Booking number:\s*(.+)', email_body)
+            if booking_match:
+                details['booking_number'] = booking_match.group(1).strip()
+                
+        except Exception as e:
+            self.logger.error(f"Error extracting booking details: {str(e)}")
+        
+        return details
+
     def process_new_bookeo_emails(self, emails):
         """Process and send SMS alerts for new Bookeo emails"""
         for email_info in emails:
             try:
                 subject = email_info.get('subject', 'No Subject')
-                sender = email_info.get('from', 'Unknown Sender')
-                received_time = email_info.get('date', 'Unknown Time')
+                email_body = email_info.get('body', '')
                 
-                # Create SMS message
-                message = (
-                    f"🔔 New Bookeo Email Alert!\n"
-                    f"From: {sender}\n"
-                    f"Subject: {subject}\n"
-                    f"Time: {received_time}\n"
-                    f"Check your email for details."
-                )
+                # Extract booking details from email body
+                booking_details = self.extract_booking_details(email_body)
+                
+                # Create detailed SMS message
+                if booking_details:
+                    message = "🔔 NEW BOOKEO BOOKING!\n"
+                    
+                    if 'date' in booking_details:
+                        message += f"📅 Date: {booking_details['date']}\n"
+                    if 'time' in booking_details:
+                        message += f"⏰ Time: {booking_details['time']}\n"
+                    if 'game' in booking_details:
+                        message += f"🎮 Game: {booking_details['game']}\n"
+                    if 'participants' in booking_details:
+                        message += f"👥 Participants: {booking_details['participants']}\n"
+                    if 'price' in booking_details:
+                        message += f"💰 Total: {booking_details['price']}\n"
+                    if 'customer' in booking_details:
+                        message += f"👤 Customer: {booking_details['customer']}\n"
+                    if 'customer_phone' in booking_details:
+                        message += f"📞 Phone: {booking_details['customer_phone']}\n"
+                    if 'booking_number' in booking_details:
+                        message += f"🎫 Booking #: {booking_details['booking_number']}\n"
+                else:
+                    # Fallback message if extraction fails
+                    message = (
+                        f"🔔 New Bookeo Booking!\n"
+                        f"Subject: {subject}\n"
+                        f"Check email for full details."
+                    )
                 
                 # Send SMS notification
                 success = self.sms_sender.send_notification(
@@ -104,7 +181,7 @@ class EmailMonitoringAgent:
                 )
                 
                 if success:
-                    self.logger.info(f"SMS alert sent successfully for email: {subject}")
+                    self.logger.info(f"SMS alert sent successfully for booking: {booking_details.get('booking_number', 'Unknown')}")
                 else:
                     self.logger.error(f"Failed to send SMS alert for email: {subject}")
                     
