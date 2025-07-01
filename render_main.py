@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
 """
-Render.com version of the Email Monitoring Agent with HTTP keep-alive endpoint
+Enhanced Render.com version with improved keep-alive mechanism
+This version prevents the free tier from sleeping by adding internal HTTP activity
 """
 
 import time
@@ -8,6 +8,7 @@ import signal
 import sys
 import re
 import threading
+import requests
 from datetime import datetime
 from email_monitor import EmailMonitor
 from sms_sender import SMSSender
@@ -25,18 +26,11 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'text/plain')
             self.end_headers()
             self.wfile.write(b'Email Monitor is running')
-        elif self.path == '/status':
+        elif self.path == '/keepalive':
             self.send_response(200)
-            self.send_header('Content-type', 'application/json')
+            self.send_header('Content-type', 'text/plain')
             self.end_headers()
-            status = {
-                "status": "running",
-                "service": "Bookeo Email Monitor",
-                "last_check": str(datetime.now()),
-                "target_email": "robot@quantumescapesdanville.com",
-                "alert_phone": "619-917-2605"
-            }
-            self.wfile.write(str(status).encode())
+            self.wfile.write(b'Keep-alive ping received')
         else:
             self.send_response(404)
             self.end_headers()
@@ -52,6 +46,7 @@ class EmailMonitoringAgent:
         self.email_monitor = EmailMonitor(self.config, self.logger)
         self.sms_sender = SMSSender(self.config, self.logger)
         self.running = True
+        self.service_url = None
         
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -59,6 +54,9 @@ class EmailMonitoringAgent:
         
         # Start HTTP server for keep-alive
         self.start_http_server()
+        
+        # Start internal keep-alive pinger
+        self.start_keep_alive_pinger()
     
     def start_http_server(self):
         """Start HTTP server for health checks and keep-alive"""
@@ -75,6 +73,38 @@ class EmailMonitoringAgent:
         # Run HTTP server in background thread
         server_thread = threading.Thread(target=run_server, daemon=True)
         server_thread.start()
+    
+    def start_keep_alive_pinger(self):
+        """Start internal keep-alive pinger to prevent sleeping"""
+        def ping_self():
+            while self.running:
+                try:
+                    # Wait 10 minutes between pings
+                    time.sleep(600)  # 10 minutes
+                    
+                    if self.running:
+                        # Try to ping our own health endpoint
+                        try:
+                            if not self.service_url:
+                                # Try to determine our service URL from environment
+                                render_service = os.environ.get('RENDER_SERVICE_NAME', 'bookeo-email-monitor')
+                                self.service_url = f"https://{render_service}.onrender.com"
+                            
+                            response = requests.get(f"{self.service_url}/keepalive", timeout=30)
+                            if response.status_code == 200:
+                                self.logger.info("Keep-alive ping successful - service staying awake")
+                            else:
+                                self.logger.warning(f"Keep-alive ping returned status: {response.status_code}")
+                        except Exception as ping_error:
+                            self.logger.warning(f"Keep-alive ping failed: {str(ping_error)}")
+                            
+                except Exception as e:
+                    self.logger.error(f"Keep-alive pinger error: {str(e)}")
+        
+        # Start keep-alive pinger in background thread
+        pinger_thread = threading.Thread(target=ping_self, daemon=True)
+        pinger_thread.start()
+        self.logger.info("Internal keep-alive pinger started (10-minute intervals)")
     
     def signal_handler(self, signum, frame):
         """Handle shutdown signals gracefully"""
@@ -158,14 +188,10 @@ class EmailMonitoringAgent:
                         message += f"🎮 Game: {booking_details['game']}\n"
                     if 'participants' in booking_details:
                         message += f"👥 Participants: {booking_details['participants']}\n"
-                    if 'price' in booking_details:
-                        message += f"💰 Total: {booking_details['price']}\n"
                     if 'customer' in booking_details:
                         message += f"👤 Customer: {booking_details['customer']}\n"
                     if 'customer_phone' in booking_details:
                         message += f"📞 Phone: {booking_details['customer_phone']}\n"
-                    if 'booking_number' in booking_details:
-                        message += f"🎫 Booking #: {booking_details['booking_number']}\n"
                 else:
                     # Fallback message if extraction fails
                     message = (
@@ -187,13 +213,11 @@ class EmailMonitoringAgent:
                     
             except Exception as e:
                 self.logger.error(f"Error processing email notification: {str(e)}")
-    
+
     def run_monitoring_cycle(self):
         """Run a single monitoring cycle"""
         try:
             self.logger.info("Starting email monitoring cycle...")
-            
-            # Check for new Bookeo emails
             new_emails = self.email_monitor.check_for_bookeo_emails()
             
             if new_emails:
@@ -203,69 +227,54 @@ class EmailMonitoringAgent:
                 self.logger.info("No new Bookeo emails found")
                 
         except Exception as e:
-            self.logger.error(f"Error during monitoring cycle: {str(e)}")
-    
+            self.logger.error(f"Error in monitoring cycle: {str(e)}")
+
     def run(self):
         """Main monitoring loop"""
-        self.logger.info("Email Monitoring Agent started on Render.com")
-        self.logger.info(f"Monitoring: {self.config.email_address}")
-        self.logger.info(f"Target sender: {self.config.bookeo_sender}")
-        self.logger.info(f"SMS alerts to: {self.config.target_phone_number}")
-        self.logger.info(f"Check interval: {self.config.check_interval} seconds")
-        
-        # Validate configuration
-        if not self.config.validate():
-            self.logger.error("Configuration validation failed. Exiting...")
-            return False
-        
-        # Test connections (but don't exit on failure - continue with resilience)
-        if not self.email_monitor.test_connection():
-            self.logger.error("Email connection test failed.")
-            self.logger.error("The agent will continue running and retry connections periodically.")
+        try:
+            # Test connections before starting main loop
+            self.logger.info("Testing email connection...")
+            if not self.email_monitor.test_connection():
+                self.logger.error("Email connection test failed")
+                return False
             
-        if not self.sms_sender.test_connection():
-            self.logger.error("SMS service connection test failed.")
-            self.logger.error("Please check Twilio credentials.")
-        else:
+            self.logger.info("Testing Twilio connection...")
+            if not self.sms_sender.test_connection():
+                self.logger.error("Twilio connection test failed")
+                return False
+            
             self.logger.info("All connection tests passed. Starting monitoring...")
-        
-        # Main monitoring loop
-        while self.running:
-            try:
-                cycle_start = datetime.now()
+            
+            # Main monitoring loop
+            while self.running:
                 self.run_monitoring_cycle()
                 
-                # Calculate sleep time to maintain consistent interval
-                cycle_duration = (datetime.now() - cycle_start).total_seconds()
-                sleep_time = max(0, self.config.check_interval - cycle_duration)
-                
-                if sleep_time > 0:
-                    self.logger.debug(f"Sleeping for {sleep_time:.2f} seconds until next check")
-                    time.sleep(sleep_time)
-                else:
-                    self.logger.warning(f"Monitoring cycle took longer than interval: {cycle_duration:.2f}s")
-                    
-            except KeyboardInterrupt:
-                self.logger.info("Keyboard interrupt received. Shutting down...")
-                break
-            except Exception as e:
-                self.logger.error(f"Unexpected error in main loop: {str(e)}")
-                self.logger.info(f"Waiting {self.config.check_interval} seconds before retry...")
-                time.sleep(self.config.check_interval)
-        
-        self.logger.info("Email Monitoring Agent stopped")
-        return True
+                # Wait for next check (2 minutes)
+                for _ in range(120):  # 120 seconds = 2 minutes
+                    if not self.running:
+                        break
+                    time.sleep(1)
+            
+            self.logger.info("Email monitoring stopped")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Critical error in monitoring loop: {str(e)}")
+            return False
 
 def main():
     """Entry point for the application"""
     agent = EmailMonitoringAgent()
     
     try:
-        success = agent.run()
-        sys.exit(0 if success else 1)
+        agent.run()
+    except KeyboardInterrupt:
+        agent.logger.info("Received keyboard interrupt, shutting down...")
     except Exception as e:
-        agent.logger.error(f"Fatal error: {str(e)}")
-        sys.exit(1)
+        agent.logger.error(f"Unexpected error: {str(e)}")
+    finally:
+        agent.running = False
+        agent.logger.info("Email monitoring agent shutdown complete")
 
 if __name__ == "__main__":
     main()
