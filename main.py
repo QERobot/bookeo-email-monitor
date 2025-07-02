@@ -41,11 +41,11 @@ class EmailMonitoringAgent:
                 
                 # Create SMS message
                 message = (
-                    f"🔔 New Bookeo Email Alert!\n"
-                    f"From: {sender}\n"
-                    f"Subject: {subject}\n"
-                    f"Time: {received_time}\n"
-                    f"Check your email for details."
+                    f" New Bookeo Email Alert!\n"
+                #    f"From: {sender}\n"
+                #    f"Subject: {subject}\n"
+                #    f"Time: {received_time}\n"
+                #    f"Check your email for details."
                 )
                 
                 # Send SMS notification
