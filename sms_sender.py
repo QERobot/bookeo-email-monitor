@@ -106,9 +106,8 @@ class SMSSender:
     def send_test_message(self, to_phone_number):
         """Send a test message to verify SMS functionality"""
         test_message = (
-            "🧪 Email Monitor Test\n"
-            "This is a test message from your Bookeo email monitoring agent. "
-            "If you receive this, SMS notifications are working correctly!"
+            "Email Monitor Test\n"
+            "test message"
         )
         
         self.logger.info("Sending test SMS message...")
