@@ -88,7 +88,7 @@ class SMSSender:
             
             # Send SMS
             twilio_message = self.client.messages.create(
-                body=message[:1600],  # Limit message length
+                body=message[:50],  # Limit message length  # was [:1600 and shortened to 50 to minimize cost and use free service
                 from_=formatted_from,
                 to=formatted_to
             )
