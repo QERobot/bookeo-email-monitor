@@ -107,7 +107,7 @@ class SMSSender:
         """Send a test message to verify SMS functionality"""
         test_message = (
             "Email Monitor Test\n"
-            "test message"
+        #    "test message"
         )
         
         self.logger.info("Sending test SMS message...")
